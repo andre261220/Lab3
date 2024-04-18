@@ -95,6 +95,121 @@ En el caso antes de spawnear una nueva tortuga, se mata cualquier instancia exis
 
 Después de eliminar la tortuga existente, se utiliza la función spawn para crear una nueva tortuga en la posición especificada por el usuario y al igual que en el "spawn.py", Turtlesim se encarga del mapeo de las coordenadas y el nombre de la tortuga en comandos de simulación adecuados. En ambos casos, el mapeo de velocidades se realiza de manera transparente para el usuario a través de las funciones proporcionadas por ROS y Turtlesim. El usuario simplemente proporciona las coordenadas y el nombre de la tortuga, y el sistema se encarga de traducir estas entradas en comandos específicos para el simulador. Esto demuestra cómo ROS facilita el desarrollo de aplicaciones robóticas al abstraer gran parte de la complejidad del control del hardware y la simulación.
 
+Para el paso 4 necesitamos usar un controlador (libre) para llevar a la tortuga a la posición deseada, hacerlo en bucle infinito, en este caso nosotros estamos usando un controlador PID (Proporcional-Integral-Derivativo) para mover una tortuga en el simulador Turtlesim hacia una posición y orientación deseadas.
+
+Controlador PID:
+
+Utiliza un controlador PID para calcular las velocidades lineales y angulares necesarias para mover la tortuga hacia una posición y orientación específicas, este utiliza la retroalimentación de la posición actual de la tortuga para calcular los errores de posición y orientación, y ajusta continuamente el movimiento de la tortuga para minimizar estos errores.
+
+para su funcionamiento primero suscribe al topic /turtle1/pose para obtener la posición y orientación actual de la tortuga en el simulador, despues publica en el topic /turtle1/cmd_vel para enviar comandos de velocidad a la tortuga y controlar su movimiento, asi permite al usuario ingresar manualmente la posición y orientación deseadas para la tortuga.
+
+Se utiliza un bucle infinito para mover continuamente la tortuga hacia la posición y orientación deseadas hasta que se interrumpa manualmente el programa para proporcionar un controlador automático para mover la tortuga a posiciones y orientaciones específicas en el simulador Turtlesim. En este caso el bucle se encuentra dentro del método move_turtle_to_desired_pose. Este método se encarga de calcular y aplicar las velocidades necesarias para mover la tortuga a la posición y orientación deseadas, y se ejecuta en un bucle infinito hasta que se alcance la posición deseada.
+
+## codigo del bucle 
+```python
+import rospy
+from geometry_msgs.msg import Twist
+from turtlesim.msg import Pose
+from math import atan2, radians, sqrt
+
+class MoveTurtlePIDControl:
+    def __init__(self):
+        rospy.init_node('control_tortuga_pid')
+        
+        # Suscribirse al topic de la posición de la tortuga
+        self.pose_subscriber = rospy.Subscriber('/turtle1/pose', Pose, self.pose_callback)
+        
+        # Publicar en el topic de comandos de movimiento de la tortuga
+        self.velocity_publisher = rospy.Publisher('/turtle1/cmd_vel', Twist, queue_size=10)
+        
+        # Tasa de publicación de mensajes (10 Hz)
+        self.rate = rospy.Rate(10)
+        
+        # Variables para el controlador PID en cada eje
+        self.Kp_x = 1
+        self.Kp_y = 1
+        self.Kp_theta = 1
+
+        self.current_x = 0
+        self.current_y = 0
+        self.current_theta = 0
+
+    def pose_callback(self, pose):
+        # Función que se ejecuta cada vez que llega una actualización de la posición de la tortuga
+        self.current_x = pose.x
+        self.current_y = pose.y
+        self.current_theta = pose.theta
+
+    def move_turtle_to_desired_pose(self, desired_x, desired_y, desired_theta):
+        while not rospy.is_shutdown():
+            # Calcular los errores de posición
+            error_x = desired_x - self.current_x
+            error_y = desired_y - self.current_y
+            error_theta = atan2(error_y, error_x) - self.current_theta
+            
+            # Normalizar el ángulo
+            if error_theta > radians(180):
+                error_theta -= radians(360)
+            elif error_theta < -radians(180):
+                error_theta += radians(360)
+            
+            # Calcular las velocidades lineales y angular del movimiento
+            vel_x = self.Kp_x * error_x
+            vel_y = self.Kp_y * error_y
+            vel_theta = self.Kp_theta * error_theta
+            
+            # Crear un mensaje de Twist para enviar el comando de movimiento
+            twist_msg = Twist()
+            twist_msg.linear.x = vel_x
+            twist_msg.linear.y = vel_y
+            twist_msg.angular.z = vel_theta
+            
+            # Publicar el mensaje
+            self.velocity_publisher.publish(twist_msg)
+            
+            # Imprimir la posición actual y los errores en la terminal
+            rospy.loginfo("Posición actual: x=%f, y=%f, theta=%f", self.current_x, self.current_y, self.current_theta)
+            rospy.loginfo("Errores: ex=%f, ey=%f, etheta=%f", error_x, error_y, error_theta)
+            
+            # Verificar si se alcanza la posición deseada
+            if sqrt(error_x**2 + error_y**2) < 0.1 and abs(error_theta) < radians(5):
+                rospy.loginfo("Posición deseada alcanzada")
+                break
+            
+            # Esperar hasta la siguiente iteración
+            self.rate.sleep()
+
+    def move_turtle_interactively(self):
+        while not rospy.is_shutdown():
+            # Obtener la pose deseada del usuario
+            desired_x, desired_y, desired_theta = self.get_desired_pose_from_user()
+
+            # Mover la tortuga a la posición deseada
+            self.move_turtle_to_desired_pose(desired_x, desired_y, desired_theta)
+
+    def get_desired_pose_from_user(self):
+        print("Ingrese la posición y orientación deseadas:")
+        desired_x = float(input("Coordenada x: "))
+        desired_y = float(input("Coordenada y: "))
+        desired_theta = radians(float(input("Orientación (en grados): ")))
+        return desired_x, desired_y, desired_theta
+
+if __name__ == '__main__':
+    try:
+        move_turtle_pid = MoveTurtlePIDControl()
+        move_turtle_pid.move_turtle_interactively()
+    except rospy.ROSInterruptException:
+        pass
+```
+Explicación del bucle:
+
+* El bucle while not rospy.is_shutdown(): se ejecuta continuamente mientras ROS no esté en el proceso de apagado (es decir, mientras el nodo esté en funcionamiento).
+* Dentro del bucle, se calculan los errores de posición y orientación entre la posición actual y la deseada.
+* Luego, se utilizan estos errores para calcular las velocidades lineales y angulares del movimiento utilizando el controlador PID.
+* Se crea un mensaje de tipo Twist con estas velocidades calculadas y se publica en el topic /turtle1/cmd_vel.
+* Se imprime la posición actual y los errores en la terminal para fines de depuración.
+* Se verifica si se alcanza la posición deseada. Si es así, se registra un mensaje informativo y se rompe el bucle.
+* Finalmente, se espera hasta la siguiente iteración utilizando self.rate.sleep(), lo que asegura que el bucle se ejecute a una tasa específica (en este caso, 10 Hz.
 
 
 
